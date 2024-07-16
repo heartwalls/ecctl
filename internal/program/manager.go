@@ -2,7 +2,9 @@ package program
 
 import (
 	"bytes"
-	"ecctl/internal/logger"
+	"errors"
+	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,13 +13,13 @@ import (
 
 // getProgramPath 获取当前目录下指定程序的绝对路径。
 func getProgramPath(path string) (string, error) {
-	logger.Log.Debugf("获取程序路径: %s", path)
+	//fmt.Printf("获取程序路径: %s", path)
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		logger.Log.Errorf("获取程序路径时出错: %v", err)
+		log.Fatalf("获取程序路径时出错: %v\n", err)
 		return "", err
 	}
-	logger.Log.Debugf("程序绝对路径: %s", absPath)
+	//fmt.Printf("程序绝对路径: %s", absPath)
 	return absPath, nil
 }
 
@@ -29,7 +31,7 @@ func isRunning(program string) (bool, error) {
 		return false, err
 	}*/
 
-	logger.Log.Debugf("检查程序是否运行: %s", program)
+	//fmt.Printf("检查程序是否运行: %s", program)
 
 	// 使用 pgrep 命令来查找正在运行的程序
 	cmd := exec.Command("pgrep", "-fl", program)
@@ -39,19 +41,20 @@ func isRunning(program string) (bool, error) {
 	err := cmd.Run()
 	if err != nil {
 		// 检查 pgrep 的退出状态码，如果是 1 表示没有找到进程，不算错误
-		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 1 {
-			logger.Log.Debugf("pgrep 未找到匹配进程: %s", program)
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+			//fmt.Printf("pgrep 未找到匹配进程: %s", program)
 			return false, nil
 		}
-		logger.Log.Errorf("运行 pgrep 时出错: %v", err)
+		fmt.Printf("运行 pgrep 时出错: %v\n", err)
 		return false, err
 	}
 
-	logger.Log.Debugf("pgrep 输出:\n%s", out.String())
+	//fmt.Printf("pgrep 输出:\n%s", out.String())
 
 	// 获取当前程序的 PID
 	currentPID := os.Getpid()
-	logger.Log.Debugf("当前程序 PID: %d", currentPID)
+	//fmt.Printf("当前程序 PID: %d", currentPID)
 
 	// 检查 pgrep 输出，过滤掉当前运行的命令
 	lines := strings.Split(out.String(), "\n")
@@ -79,66 +82,68 @@ func isRunning(program string) (bool, error) {
 
 		// 检查命令行是否包含程序名
 		if strings.Contains(cmd, program) {
-			logger.Log.Debugf("找到匹配进程: %s", line)
+			//fmt.Printf("找到匹配进程: %s", line)
 			return true, nil
 		}
 	}
 
-	logger.Log.Debugf("未找到匹配进程: %s", program)
+	//fmt.Printf("未找到匹配进程: %s", program)
 	return false, nil
 }
 
 // Start 启动指定的程序
 func Start(path string) {
-	logger.Log.Infof("尝试启动程序: %s", path)
+	//fmt.Printf("尝试启动程序: %s", path)
 
 	// 获取程序的绝对路径。
 	absPath, err := getProgramPath(path)
 	if err != nil {
-		logger.Log.Error("获取程序路径时出错：", err)
+		log.Fatalln("获取程序路径时出错：", err)
 		return
 	}
 
 	// 检查程序是否存在
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
-		logger.Log.Errorf("程序不存在：%s", absPath)
+		log.Fatalf("程序不存在：%s\n", absPath)
 		return
 	}
 
 	// 获取程序的工作目录
 	workDir := filepath.Dir(absPath)
-	logger.Log.Debugf("目录: %s", workDir)
+	//fmt.Printf("目录: %s", workDir)
 
 	program := filepath.Base(absPath)
 	// 创建一个新的命令来运行指定的程序
-	cmd := exec.Command("./" + program)
+	var cmd *exec.Cmd
+	if strings.HasSuffix(program, ".jar") {
+		cmd = exec.Command("nohup java -jar " + program + " &")
+	} else {
+		cmd = exec.Command("./" + program)
+	}
 
 	// 检查程序是否已经在运行。
 	running, err := isRunning(program)
 	if err != nil {
-		logger.Log.Error("检查程序运行状态时出错：", err)
+		log.Fatalln("检查程序运行状态时出错：", err)
 		return
 	}
 
 	if running {
-		logger.Log.Warnf("程序 '%s' 已经在运行", program)
+		fmt.Printf("%s is already running.\n", program)
 		return
 	}
 
 	// 设置命令的工作目录。
 	cmd.Dir = workDir
-	// 将命令的标准输出和标准错误输出重定向到日志记录器
-	cmd.Stdout = logger.Log.Out
-	cmd.Stderr = logger.Log.Out
 
 	// 启动命令执行的进程
 	err = cmd.Start()
 	if err != nil {
-		logger.Log.Error("启动程序时出错：", err)
+		log.Fatalln("启动程序时出错：", err)
 		return
 	}
 
-	logger.Log.Infof("程序 '%s' 启动成功", program)
+	fmt.Printf("%s started successfully.\n", program)
 
 	// 启动一个新的 goroutine 来等待进程的结束
 	go func() {
@@ -146,14 +151,14 @@ func Start(path string) {
 		if err != nil {
 			return
 		}
-		logger.Log.Infof("程序 '%s' 已退出", program)
+		fmt.Printf("%s has been launched.\n", program)
 	}()
 }
 
 // Stop 停止指定的程序
 // 使用 pkill 命令来终止运行中的程序
 func Stop(program string) {
-	logger.Log.Infof("尝试停止程序: %s", program)
+	//fmt.Printf("尝试停止程序: %s", program)
 
 	// 获取程序的绝对路径。
 	/*programPath, err := getProgramPath(program)
@@ -165,12 +170,12 @@ func Stop(program string) {
 	// 检查程序是否已经在运行。
 	running, err := isRunning(program)
 	if err != nil {
-		logger.Log.Error("检查程序运行状态时出错：", err)
+		log.Fatalln("检查程序运行状态时出错：", err)
 		return
 	}
 
 	if !running {
-		logger.Log.Warnf("程序 '%s' 没有运行", program)
+		fmt.Printf("%s is not running.\n", program)
 		return
 	}
 
@@ -178,12 +183,12 @@ func Stop(program string) {
 	cmd := exec.Command("pkill", "-f", program)
 	err = cmd.Run()
 	if err != nil {
-		logger.Log.Error("停止程序时出错：", err)
+		log.Fatalln("停止程序时出错：", err)
 		return
 	}
 
 	// 记录程序停止成功的信息。
-	logger.Log.Infof("程序 '%s' 已停止", program)
+	fmt.Printf("%s has stoped.\n", program)
 }
 
 // Status 检查指定程序的运行状态
@@ -199,13 +204,13 @@ func Status(program string) {
 	// 检查程序是否正在运行
 	running, err := isRunning(program)
 	if err != nil {
-		logger.Log.Error("检查程序运行状态时出错：", err)
+		log.Fatalln("检查程序运行状态时出错：", err)
 		return
 	}
 
 	if running {
-		logger.Log.Infof("程序 '%s' 正在运行", program)
+		fmt.Printf("%s is running.\n", program)
 	} else {
-		logger.Log.Infof("程序 '%s' 未运行", program)
+		fmt.Printf("%s is not running.\n", program)
 	}
 }
